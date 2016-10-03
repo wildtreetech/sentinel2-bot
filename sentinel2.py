@@ -257,11 +257,11 @@ def loop(twitter, period=3600, seed=2):
     cached_flybys = random_candidate(max_retries=2000, n_successes=1,
                                      seed=rng.randint(1,2**64))
 
-    last_post = time.time()
 
     while True:
         flyby = cached_flybys.pop()
         good_flyby = post_candidate(flyby, post=True, api=twitter)
+        last_post = time.time()
 
         cached_flybys += random_candidate(max_retries=2000, n_successes=1,
                                           seed=rng.randint(1,2**64))
