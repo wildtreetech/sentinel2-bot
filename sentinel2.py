@@ -51,7 +51,7 @@ def process_bands(directory_name):
     fnames = [os.path.join(directory_name, x)
               for x in ("B04.jp2", "B03.jp2", "B02.jp2")]
     args = ["-combine", "-contrast-stretch", r"1%x3%", "+sigmoidal-contrast",
-            r"5x50%", "-quality", "98", "-resize", r"15%",
+            r"5x50%", "-quality", "98", "-resize", r"10%",
             output_image_fname]
     cmd = ["convert"] + fnames + args
     subprocess.run(cmd, check=True)
@@ -217,10 +217,10 @@ def random_candidate(max_retries=100, seed=2, post=False, api=None):
 
 
 def twitter_credentials():
-    return dict(consumer_key=os.env.get("CONSUMER_KEY"),
-                consumer_secret=os.env.get("CONSUMER_SECRET"),
-                access_token_key=os.env.get("ACCESS_TOKEN_KEY"),
-                access_token_secret=os.env.get("ACCESS_TOKEN_SECRET"))
+    return dict(consumer_key=os.getenv("CONSUMER_KEY"),
+                consumer_secret=os.getenv("CONSUMER_SECRET"),
+                access_token_key=os.getenv("ACCESS_TOKEN_KEY"),
+                access_token_secret=os.getenv("ACCESS_TOKEN_SECRET"))
 
 
 if __name__ == "__main__":
