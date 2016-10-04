@@ -35,5 +35,5 @@ random seed used to pick locations. Every time you launch the bot you want to
 change it. Otherwise it will post the same sequence of images as last time.
 
 Currently the bot is deployed to [getcarina](https://getcarina.com) and
-@betatim has the twitter credentials. For getcarina we need to use docker
-version 1.10.3.
+[@betatim](//twitter.com/betatim) has the twitter credentials. For
+getcarina we need to use docker version 1.10.3.
