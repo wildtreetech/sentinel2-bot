@@ -120,11 +120,16 @@ def get_position(geometry):
 
 def get_address(lat, lng):
     """Convert latitude and longitude into an address using OSM"""
+    # otherwise we get unicode mixed with latin which often exceeds
+    # the 140character limit of twitter :(
+    headers = {'Accept-Language': "en-US,en;q=0.8"}
     nominatim_url = ("http://nominatim.openstreetmap.org/reverse?lat=%f&lon=%f&"
-                     "addressdetails=1&format=json&zoom=10&extratags=1")
-    info = json.loads(requests.get(nominatim_url % (lat, lng)).text)
+                     "addressdetails=0&format=json&zoom=6&extratags=0")
+    info = json.loads(requests.get(nominatim_url % (lat, lng),
+                                   headers=headers).text)
     if 'error' in info:
         return 'Unknown location, do you know it? Tell @openstreetmap'
+
     return info['display_name']
 
 
@@ -194,7 +199,7 @@ def post_candidate(flyby, post=False, api=None):
     return False
 
 
-def random_candidate(max_retries=100, n_successes=1, seed=2,
+def random_candidate(max_retries=100, n_successes=None, seed=2,
                      post=False, api=None):
     """Pick random coordinates and check if there is an image there.
 
@@ -231,7 +236,8 @@ def random_candidate(max_retries=100, n_successes=1, seed=2,
 
                         # collecting/caching images
                         good_flybys.append(good_flyby)
-                        if n_successes <= len(good_flybys):
+                        if (n_successes is not None and
+                            n_successes <= len(good_flybys)):
                             return good_flybys
 
                     time.sleep(0.5)
@@ -272,12 +278,15 @@ def loop(twitter, period=3600, seed=2):
 if __name__ == "__main__":
     import sys
     flyby = sys.argv[1]
+    if len(sys.argv) == 3:
+        seed = sys.argv[2]
+    else:
+        seed = random.randint(1,2**64)
 
     if flyby == 'random':
-        random_candidate()
+        random_candidate(seed=seed)
 
     elif flyby == 'forever':
-        seed = sys.argv[2]
         api = twitter.Api(**twitter_credentials())
         loop(api, seed=seed)
 
