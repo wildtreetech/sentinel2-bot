@@ -163,7 +163,6 @@ def post_candidate(flyby, post=False, api=None):
         #and interestingness[0] > 60 and interestingness[1] > 20 and
         #interestingness[2] > 400
        ):
-        print(BASE_URL + flyby + "preview.jpg")
         print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
         print('Mean %.1f +- %.2f Corners: %i' % interestingness)
         print(lat, lng, get_address(lat, lng))
@@ -190,30 +189,52 @@ def post_candidate(flyby, post=False, api=None):
                             display_coordinates=True,
                             )
 
+        return flyby
 
-def random_candidate(max_retries=100, seed=2, post=False, api=None):
+    return False
+
+
+def random_candidate(max_retries=100, n_successes=1, seed=2,
+                     post=False, api=None):
+    """Pick random coordinates and check if there is an image there.
+
+    Will guess up to `max_retries` coordinates and check if there
+    is an image available for them. Will stop after posting the first
+    image to twitter if `post=True` or once it has found `n_successes`.
+    """
     rng = random.Random(seed)
+
+    good_flybys = []
     for n in range(max_retries):
-        #try:
-            url = "tiles/%s/%s/%s/" % random_mgrs(seed=rng.randint(1,2**64))
-            years = get_listing(url)
-            if years:
-                year = rng.choice(years)
-                months = get_listing(year)
-                if months:
-                    month = rng.choice(months)
-                    days = get_listing(month)
-                    if days:
-                        day = rng.choice(days)
-                        flybys = get_listing(day)
-                        flyby = rng.choice(flybys)
+        url = "tiles/%s/%s/%s/" % random_mgrs(seed=rng.randint(1,2**64))
+        years = get_listing(url)
+        if years:
+            year = rng.choice(years)
+            months = get_listing(year)
+            if months:
+                month = rng.choice(months)
+                days = get_listing(month)
+                if days:
+                    day = rng.choice(days)
+                    flybys = get_listing(day)
+                    flyby = rng.choice(flybys)
 
-                        print("Iteration:", n, flyby)
-                        post_candidate(flyby, post=post, api=api)
+                    print("Iteration:", n, flyby)
+                    print(BASE_URL + flyby + "preview.jpg")
 
-                        time.sleep(0.5)
-        #except:
-        #    time.sleep(4)
+                    good_flyby = post_candidate(flyby, post=post, api=api)
+
+                    if good_flyby:
+                        # posting, so stop after one image
+                        if post:
+                            return None
+
+                        # collecting/caching images
+                        good_flybys.append(good_flyby)
+                        if n_successes <= len(good_flybys):
+                            return good_flybys
+
+                    time.sleep(0.5)
 
 
 def twitter_credentials():
@@ -223,6 +244,31 @@ def twitter_credentials():
                 access_token_secret=os.getenv("ACCESS_TOKEN_SECRET"))
 
 
+def loop(twitter, period=3600, seed=2):
+    """Keep running for ever and ever and ever.
+
+    Will post an image to twitter every `period` seconds.
+    """
+    # first find an image and process it. Then sleep till
+    # it is time to post it, then look for the next image, then go to sleep,...
+    # this way it should be easier to post on time
+    rng = random.Random(seed)
+
+    cached_flybys = random_candidate(max_retries=2000, n_successes=1,
+                                     seed=rng.randint(1,2**64))
+
+
+    while True:
+        flyby = cached_flybys.pop()
+        good_flyby = post_candidate(flyby, post=True, api=twitter)
+        last_post = time.time()
+
+        cached_flybys += random_candidate(max_retries=2000, n_successes=1,
+                                          seed=rng.randint(1,2**64))
+
+        time.sleep(period - (time.time() - last_post))
+
+
 if __name__ == "__main__":
     import sys
     flyby = sys.argv[1]
@@ -230,6 +276,13 @@ if __name__ == "__main__":
     if flyby == 'random':
         random_candidate()
 
+    elif flyby == 'forever':
+        seed = sys.argv[2]
+        api = twitter.Api(**twitter_credentials())
+        loop(api, seed=seed)
+
     else:
         api = twitter.Api(**twitter_credentials())
         post_candidate(flyby, api=api, post=True)
+
+# posted at 20:14
