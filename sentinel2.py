@@ -6,6 +6,7 @@ import requests
 import shutil
 import subprocess
 import time
+import urllib
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -120,6 +121,13 @@ def get_position(geometry):
 
 def get_address(lat, lng):
     """Convert latitude and longitude into an address using OSM"""
+    def _cut(s):
+        if len(s) < 82: return s
+        while len(s) >= 82:
+            ss = s.split(",")
+            s = ', '.join([x.strip() for x in ss[1:]])
+        return s
+
     # otherwise we get unicode mixed with latin which often exceeds
     # the 140character limit of twitter :(
     headers = {'Accept-Language': "en-US,en;q=0.8"}
@@ -130,7 +138,7 @@ def get_address(lat, lng):
     if 'error' in info:
         return 'Unknown location, do you know it? Tell @openstreetmap'
 
-    return info['display_name']
+    return _cut(info['display_name'])
 
 
 def format_lat_lng(lat, lng):
@@ -227,7 +235,11 @@ def random_candidate(max_retries=100, n_successes=None, seed=2,
                     print("Iteration:", n, flyby)
                     print(BASE_URL + flyby + "preview.jpg")
 
-                    good_flyby = post_candidate(flyby, post=post, api=api)
+                    try:
+                        good_flyby = post_candidate(flyby, post=post, api=api)
+                    except urllib.error.HTTPError:
+                        time.sleep(1)
+                        continue
 
                     if good_flyby:
                         # posting, so stop after one image
