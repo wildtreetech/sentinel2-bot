@@ -201,6 +201,7 @@ def post_candidate(flyby, post=False, api=None):
                             latitude=lat, longitude=lng,
                             display_coordinates=True,
                             )
+            shutil.rmtree(directory_name, ignore_errors=True)
 
         return flyby
 
