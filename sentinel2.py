@@ -121,9 +121,11 @@ def get_position(geometry):
 
 def get_address(lat, lng):
     """Convert latitude and longitude into an address using OSM"""
-    def _cut(s):
-        if len(s) < 82: return s
-        while len(s) >= 82:
+    def _norm_len(s):
+        return len(unicodedata.normalize("NFC", s).encode('utf-8'))
+    def _cut(s, max_len=72):
+        if _norm_len(s) < max_len: return s
+        while _norm_len(s) >= max_len:
             ss = s.split(",")
             s = ', '.join([x.strip() for x in ss[1:]])
         return s
