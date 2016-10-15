@@ -6,6 +6,7 @@ import requests
 import shutil
 import subprocess
 import time
+import unicodedata
 import urllib
 import xml.etree.ElementTree as ET
 
@@ -67,7 +68,6 @@ def random_mgrs(seed=657):
     col = rng.choice("ABCDEFGHJKLMNPQRSTUVXYZ")
     row = rng.choice("ABCDEFGHJKLMNPQRSTUV")
     return (gzd, sqid, "%s%s"% (col, row))
-    #return (50, 'M', 'LE')
 
 
 def get_listing(prefix):
@@ -94,19 +94,13 @@ def not_nan(x):
 
 def image_interestingness(prefix):
     """Calculate how visually interesting a picture is."""
-    img = novice.open(BASE_URL + prefix)
-    means = []
-    stds = []
-    corners = 0
-    for i in (0,1,2):
-        means.append(img.xy_array[:,:,i].mean())
-        stds.append(img.xy_array[:,:,i].std())
+    img = novice.open(BASE_URL + prefix).xy_array
 
-        image = img.xy_array[:,:,i]
-        coords = corner_peaks(corner_harris(image), min_distance=5)
-        corners += not_nan(coords).shape[0]
+    red = img[:,:,0].mean()
+    green = img[:,:,1].mean()
+    blue = img[:,:,2].mean()
 
-    return (np.mean(means), np.mean(stds), corners)
+    return (red + green) / 2 / blue
 
 
 def get_position(geometry):
@@ -174,12 +168,9 @@ def post_candidate(flyby, post=False, api=None):
     MSG = "{location} ({lat_lng}), {date}"
 
     print('coverage:', coverage, 'clouds:', cloudy_pixels)
-    if (complete and not cloudy
-        #and interestingness[0] > 60 and interestingness[1] > 20 and
-        #interestingness[2] > 400
-       ):
+    if (complete and not cloudy and (interestingness > 0.7)):
         print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
-        print('Mean %.1f +- %.2f Corners: %i' % interestingness)
+        print('(R+G)/2/B %.1f' % interestingness)
         print(lat, lng, get_address(lat, lng))
         parts = flyby.split('/')
         day = parts[-3]
@@ -299,7 +290,7 @@ if __name__ == "__main__":
         seed = random.randint(1,2**64)
 
     if flyby == 'random':
-        random_candidate(seed=seed)
+        random_candidate(seed=seed, max_retries=2000)
 
     elif flyby == 'forever':
         api = twitter.Api(**twitter_credentials())
@@ -308,5 +299,3 @@ if __name__ == "__main__":
     else:
         api = twitter.Api(**twitter_credentials())
         post_candidate(flyby, api=api, post=True)
-
-# posted at 20:14
