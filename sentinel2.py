@@ -15,7 +15,9 @@ import numpy as np
 import pyproj
 
 from skimage import novice
-from skimage.feature import corner_harris, corner_subpix, corner_peaks
+from skimage import io
+from skimage import transform
+from skimage import exposure
 
 import twitter
 
@@ -50,14 +52,19 @@ def process_bands(directory_name):
     if os.path.exists(output_image_fname):
         return output_image_fname
 
-    fnames = [os.path.join(directory_name, x)
-              for x in ("B04.jp2", "B03.jp2", "B02.jp2")]
-    args = ["-combine", "-contrast-stretch", r"1%x3%", "+sigmoidal-contrast",
-            r"5x50%", "-quality", "98", "-resize", r"10%",
-            output_image_fname]
-    cmd = ["convert"] + fnames + args
-    subprocess.run(cmd, check=True)
+    r = io.imread(directory_name + "/B04.jp2")
+    g = io.imread(directory_name + "/B03.jp2")
+    b = io.imread(directory_name + "/B02.jp2")
 
+    r = transform.resize(r, (4000, 4000))
+    g = transform.resize(g, (4000, 4000))
+    b = transform.resize(b, (4000, 4000))
+
+    rgb = np.dstack((r,g,b))
+    rgb = exposure.equalize_adapthist(rgb, clip_limit=0.03)
+    rgb = transform.resize(rgb, (1098*2, 1098*2))
+
+    io.imsave(output_image_fname, rgb, quality=95)
     return output_image_fname
 
 
