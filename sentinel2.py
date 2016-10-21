@@ -57,14 +57,17 @@ def process_bands(directory_name):
     b = io.imread(directory_name + "/B02.jp2")
 
     r = transform.resize(r, (4000, 4000))
+    r *= 0.93
     g = transform.resize(g, (4000, 4000))
     b = transform.resize(b, (4000, 4000))
 
     rgb = np.dstack((r,g,b))
-    rgb = exposure.equalize_adapthist(rgb, clip_limit=0.03)
+    low, high = np.percentile(rgb, (1, 97))
+    rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
+    #rgb = exposure.equalize_adapthist(rgb, clip_limit=0.03)
     rgb = transform.resize(rgb, (1098*2, 1098*2))
 
-    io.imsave(output_image_fname, rgb, quality=95)
+    io.imsave(output_image_fname, rgb, quality=90)
     return output_image_fname
 
 
@@ -166,16 +169,17 @@ def post_candidate(flyby, post=False, api=None):
 
     lat, lng = get_position(tile_info['tileGeometry'])
 
-    coverage = float(tile_info['dataCoveragePercentage'])
+    coverage = float(tile_info.get('dataCoveragePercentage', 0.))
     complete = coverage > 99
-    cloudy_pixels = float(tile_info['cloudyPixelPercentage'])
+    cloudy_pixels = float(tile_info.get('cloudyPixelPercentage', 0.))
     cloudy =  cloudy_pixels > 35.
     interestingness = image_interestingness(flyby + "preview.jpg")
 
     MSG = "{location} ({lat_lng}), {date}"
 
-    print('coverage:', coverage, 'clouds:', cloudy_pixels)
-    if (complete and not cloudy and (interestingness > 0.7)):
+    print('coverage:', coverage, 'clouds:', cloudy_pixels,
+          '(R+G)/2/B %.1f' % interestingness)
+    if (complete and not cloudy and (interestingness > 0.95)):
         print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
         print('(R+G)/2/B %.1f' % interestingness)
         print(lat, lng, get_address(lat, lng))
