@@ -64,8 +64,8 @@ def process_bands(directory_name):
 def random_mgrs(seed=657):
     rng = random.Random(seed)
     gzd = rng.choice(range(1,61))
-    sqid = rng.choice("CDEFGHJKLMNPQRSTUVX")
-    col = rng.choice("ABCDEFGHJKLMNPQRSTUVXYZ")
+    sqid = rng.choice("CDEFGHJKLMNPQRSTUVWX")
+    col = rng.choice("ABCDEFGHJKLMNPQRSTUVWXYZ")
     row = rng.choice("ABCDEFGHJKLMNPQRSTUV")
     return (gzd, sqid, "%s%s"% (col, row))
 
