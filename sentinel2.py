@@ -15,7 +15,9 @@ import numpy as np
 import pyproj
 
 from skimage import novice
-from skimage.feature import corner_harris, corner_subpix, corner_peaks
+from skimage import io
+from skimage import transform
+from skimage import exposure
 
 import twitter
 
@@ -50,14 +52,22 @@ def process_bands(directory_name):
     if os.path.exists(output_image_fname):
         return output_image_fname
 
-    fnames = [os.path.join(directory_name, x)
-              for x in ("B04.jp2", "B03.jp2", "B02.jp2")]
-    args = ["-combine", "-contrast-stretch", r"1%x3%", "+sigmoidal-contrast",
-            r"5x50%", "-quality", "98", "-resize", r"10%",
-            output_image_fname]
-    cmd = ["convert"] + fnames + args
-    subprocess.run(cmd, check=True)
+    r = io.imread(directory_name + "/B04.jp2")
+    g = io.imread(directory_name + "/B03.jp2")
+    b = io.imread(directory_name + "/B02.jp2")
 
+    r = transform.resize(r, (4000, 4000))
+    r *= 0.93
+    g = transform.resize(g, (4000, 4000))
+    b = transform.resize(b, (4000, 4000))
+
+    rgb = np.dstack((r,g,b))
+    low, high = np.percentile(rgb, (1, 97))
+    rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
+    #rgb = exposure.equalize_adapthist(rgb, clip_limit=0.03)
+    rgb = transform.resize(rgb, (1098*2, 1098*2))
+
+    io.imsave(output_image_fname, rgb, quality=90)
     return output_image_fname
 
 
@@ -94,7 +104,10 @@ def not_nan(x):
 
 def image_interestingness(prefix):
     """Calculate how visually interesting a picture is."""
-    img = novice.open(BASE_URL + prefix).xy_array
+    try:
+        img = novice.open(BASE_URL + prefix).xy_array
+    except (requests.HTTPError, urllib.error.HTTPError):
+        return -1.
 
     red = img[:,:,0].mean()
     green = img[:,:,1].mean()
@@ -159,16 +172,17 @@ def post_candidate(flyby, post=False, api=None):
 
     lat, lng = get_position(tile_info['tileGeometry'])
 
-    coverage = float(tile_info['dataCoveragePercentage'])
+    coverage = float(tile_info.get('dataCoveragePercentage', 0.))
     complete = coverage > 99
-    cloudy_pixels = float(tile_info['cloudyPixelPercentage'])
+    cloudy_pixels = float(tile_info.get('cloudyPixelPercentage', 0.))
     cloudy =  cloudy_pixels > 35.
     interestingness = image_interestingness(flyby + "preview.jpg")
 
     MSG = "{location} ({lat_lng}), {date}"
 
-    print('coverage:', coverage, 'clouds:', cloudy_pixels)
-    if (complete and not cloudy and (interestingness > 0.7)):
+    print('coverage:', coverage, 'clouds:', cloudy_pixels,
+          '(R+G)/2/B %.1f' % interestingness)
+    if (complete and not cloudy and (interestingness > 0.8)):
         print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
         print('(R+G)/2/B %.1f' % interestingness)
         print(lat, lng, get_address(lat, lng))
