@@ -104,7 +104,10 @@ def not_nan(x):
 
 def image_interestingness(prefix):
     """Calculate how visually interesting a picture is."""
-    img = novice.open(BASE_URL + prefix).xy_array
+    try:
+        img = novice.open(BASE_URL + prefix).xy_array
+    except (requests.HTTPError, urllib.error.HTTPError):
+        return -1.
 
     red = img[:,:,0].mean()
     green = img[:,:,1].mean()
@@ -179,7 +182,7 @@ def post_candidate(flyby, post=False, api=None):
 
     print('coverage:', coverage, 'clouds:', cloudy_pixels,
           '(R+G)/2/B %.1f' % interestingness)
-    if (complete and not cloudy and (interestingness > 0.95)):
+    if (complete and not cloudy and (interestingness > 0.8)):
         print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
         print('(R+G)/2/B %.1f' % interestingness)
         print(lat, lng, get_address(lat, lng))
