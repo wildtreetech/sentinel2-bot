@@ -18,6 +18,7 @@ from skimage import novice
 from skimage import io
 from skimage import transform
 from skimage import exposure
+from skimage import color
 
 import twitter
 
@@ -64,8 +65,13 @@ def process_bands(directory_name):
     rgb = np.dstack((r,g,b))
     low, high = np.percentile(rgb, (1, 97))
     rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
-    #rgb = exposure.equalize_adapthist(rgb, clip_limit=0.03)
+
     rgb = transform.resize(rgb, (1098*2, 1098*2))
+
+    rgb = rgb**0.7
+    hsv = color.rgb2hsv(rgb)
+    hsv[:,:,1] = np.clip(hsv[:,:,1] + 0.02, 0., 1.)
+    rgb = color.hsv2rgb(hsv)
 
     io.imsave(output_image_fname, rgb, quality=90)
     return output_image_fname
@@ -312,4 +318,4 @@ if __name__ == "__main__":
 
     else:
         api = twitter.Api(**twitter_credentials())
-        post_candidate(flyby, api=api, post=True)
+        post_candidate(flyby, api=api, post=False)
