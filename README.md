@@ -1,6 +1,6 @@
 # Sentinel 2 Bot
 
-I tweet pictures taken by the Sentinel 2 satellite.
+I [tweet pictures](https://twitter.com/Sentinel2Bot) taken by the Sentinel 2 satellite.
 
 Zahedan County, Sistan and Baluchestan Province, Iran (30.3°N 59.5°E), 30 August 2015:
 <img src="https://pbs.twimg.com/media/CyHNOtBUoAEcd--.jpg" width="60%" />
