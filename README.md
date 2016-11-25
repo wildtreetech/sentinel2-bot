@@ -2,8 +2,8 @@
 
 I tweet pictures taken by the Sentinel 2 satellite.
 
-Ileparatye, Central Desert Region, Northern Territory, Australia (22.1°S 133.5°E), 6 December 2015:
-<img src="https://pbs.twimg.com/media/Ct2NiHVWEAAFrOX.jpg" width="60%" />
+Zahedan County, Sistan and Baluchestan Province, Iran (30.3°N 59.5°E), 30 August 2015:
+<img src="https://pbs.twimg.com/media/CyHNOtBUoAEcd--.jpg" width="60%" />
 
 
 # Sentinel 2 Satellite
