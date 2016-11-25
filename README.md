@@ -18,6 +18,11 @@ If you spot a bug or want to improve Sentinel 2 bot, make a pull request
 or post an issue!
 
 
+# License
+
+The code is licensed under the MIT license. The images are Copernicus Sentinel data 2015-2016.
+
+
 # Deploying
 
 Brief guide on deploying Sentinel 2 bot:
