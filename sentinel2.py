@@ -1,5 +1,6 @@
 import calendar
 import json
+import math
 import os
 import random
 import requests
@@ -27,62 +28,13 @@ import twitter
 BASE_URL = "http://sentinel-s2-l1c.s3.amazonaws.com/"
 
 
-def get_bands(flyby, date, lat, lng):
-    """Get bands 2, 3 and 4 from AWS for this flyby"""
-    print("FFLLLYYYBBYYYYY:", flyby, lat, lng)
-    print(date)
-    import pdb; pdb.set_trace()
-    directory_name = flyby.replace("/", "-")
-    directory_name = '/tmp/%s' % directory_name
-
-    # if the directory exists we assume the download was a success
-    if os.path.exists(directory_name):
-        return directory_name
-
-    os.makedirs(directory_name)
-
-    for i in (2, 3, 4):
-        r = requests.get(BASE_URL + flyby + "B0%i.jp2" % i, stream=True)
-        path = os.path.join(directory_name, "B0%i.jp2" % i)
-        if r.status_code == 200:
-            with open(path, 'wb') as f:
-                r.raw.decode_content = True
-                shutil.copyfileobj(r.raw, f)
-
-    return directory_name
-
-
-def process_bands(directory_name):
-    output_image_fname = os.path.join(directory_name, "B.jpg")
-    if os.path.exists(output_image_fname):
-        return output_image_fname
-
-    r = io.imread(directory_name + "/B04.jp2")
-    g = io.imread(directory_name + "/B03.jp2")
-    b = io.imread(directory_name + "/B02.jp2")
-
-    r = transform.resize(r, (4000, 4000))
-    r *= 0.93
-    g = transform.resize(g, (4000, 4000))
-    b = transform.resize(b, (4000, 4000))
-
-    rgb = np.dstack((r,g,b))
-    low, high = np.percentile(rgb, (1, 97))
-    rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
-    #rgb = exposure.equalize_adapthist(rgb, clip_limit=0.03)
-    rgb = transform.resize(rgb, (1098*2, 1098*2))
-
-    io.imsave(output_image_fname, rgb, quality=90)
-    return output_image_fname
-
-
 def random_mgrs(seed=657):
     rng = random.Random(seed)
-    gzd = rng.choice(range(1,61))
+    gzd = rng.choice(range(1, 61))
     sqid = rng.choice("CDEFGHJKLMNPQRSTUVWX")
     col = rng.choice("ABCDEFGHJKLMNPQRSTUVWXYZ")
     row = rng.choice("ABCDEFGHJKLMNPQRSTUV")
-    return (gzd, sqid, "%s%s"% (col, row))
+    return (gzd, sqid, "%s%s" % (col, row))
 
 
 def get_listing(prefix):
@@ -99,6 +51,7 @@ def get_listing(prefix):
 
 
 def get_tileinfo(prefix):
+    print(BASE_URL + prefix + 'tileInfo.json')
     r = requests.get(BASE_URL + prefix + 'tileInfo.json')
     return json.loads(r.text)
 
@@ -172,7 +125,6 @@ def format_lat_lng(lat, lng):
     return s
 
 
-import math
 def deg2num(lat_deg, lon_deg, zoom):
     lat_rad = math.radians(lat_deg)
     n = 2.0 ** zoom
@@ -189,15 +141,26 @@ def centroid(bounds):
 
 
 def process_image(flyby):
-    z = 12
+    directory_name = flyby.replace("/", "-")
+    directory_name = '/tmp/%s' % directory_name
+    output_image_fname = directory_name + "/B.jpg"
+
+    # if the image already exists, there is nothing to do. This adds a simple
+    # mechanism for caching results
+    if os.path.exists(output_image_fname):
+        return output_image_fname
+
+    os.makedirs(directory_name)
+
+    z = 10
     _, n, g, gg, year, month, day, i,_ = flyby.split("/")
-    scene_id = "S2A_tile_%s%s%s_%s%s%s_%s" % (year, month, day,
-                                              n, g, gg, i)
-    scene_id = 'S2A_tile_20171103_32TMT_0'
+    scene_id = "S2A_tile_%s%02i%02i_%s%s%s_%s" % (year, int(month), int(day),
+                                                n, g, gg, i)
+    #scene_id = 'S2A_tile_20171103_32TMT_0'
     bounds = sentinel2.bounds(scene_id)
     x, y = deg2num(*centroid(bounds), z)
 
-    tile = sentinel2.tile(scene_id, x, y, z, tilesize=512)
+    tile = sentinel2.tile(scene_id, x, y, z, tilesize=4000)
     tile = img_as_float(tile)
 
     r = tile[0, :, :]
@@ -211,11 +174,6 @@ def process_image(flyby):
     rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
     rgb = transform.resize(rgb, (1098*2, 1098*2))
 
-    directory_name = flyby.replace("/", "-")
-    directory_name = '/tmp/%s' % directory_name
-    os.makedirs(directory_name)
-
-    output_image_fname = directory_name + "/B.jpg"
     io.imsave(output_image_fname, rgb, quality=90)
 
     return output_image_fname
@@ -228,6 +186,7 @@ def post_candidate(flyby, post=False, api=None):
 
     coverage = float(tile_info.get('dataCoveragePercentage', 0.))
     complete = coverage > 99
+    complete = coverage > 80
     cloudy_pixels = float(tile_info.get('cloudyPixelPercentage', 0.))
     cloudy = cloudy_pixels > 35.
     interestingness = image_interestingness(flyby + "preview.jpg")
@@ -334,8 +293,7 @@ def loop(twitter, period=3600, seed=2):
     rng = random.Random(seed)
 
     cached_flybys = random_candidate(max_retries=2000, n_successes=1,
-                                     seed=rng.randint(1,2**64))
-
+                                     seed=rng.randint(1, 2**64))
 
     while True:
         flyby = cached_flybys.pop()
@@ -343,7 +301,7 @@ def loop(twitter, period=3600, seed=2):
         last_post = time.time()
 
         cached_flybys += random_candidate(max_retries=2000, n_successes=1,
-                                          seed=rng.randint(1,2**64))
+                                          seed=rng.randint(1, 2**64))
 
         time.sleep(period - (time.time() - last_post))
 
@@ -357,7 +315,7 @@ if __name__ == "__main__":
         seed = random.randint(1,2**64)
 
     if flyby == 'random':
-        random_candidate(seed=seed, max_retries=2000)
+        random_candidate(seed=seed, max_retries=2000, n_successes=1)
 
     elif flyby == 'forever':
         api = twitter.Api(**twitter_credentials())
