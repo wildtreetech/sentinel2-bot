@@ -4,7 +4,6 @@ import os
 import random
 import requests
 import shutil
-import subprocess
 import time
 import unicodedata
 import urllib
@@ -18,6 +17,9 @@ from skimage import novice
 from skimage import io
 from skimage import transform
 from skimage import exposure
+from skimage import img_as_float
+
+from rio_tiler import sentinel2
 
 import twitter
 
@@ -25,8 +27,11 @@ import twitter
 BASE_URL = "http://sentinel-s2-l1c.s3.amazonaws.com/"
 
 
-def get_bands(flyby):
+def get_bands(flyby, date, lat, lng):
     """Get bands 2, 3 and 4 from AWS for this flyby"""
+    print("FFLLLYYYBBYYYYY:", flyby, lat, lng)
+    print(date)
+    import pdb; pdb.set_trace()
     directory_name = flyby.replace("/", "-")
     directory_name = '/tmp/%s' % directory_name
 
@@ -167,6 +172,55 @@ def format_lat_lng(lat, lng):
     return s
 
 
+import math
+def deg2num(lat_deg, lon_deg, zoom):
+    lat_rad = math.radians(lat_deg)
+    n = 2.0 ** zoom
+    xtile = int((lon_deg + 180.0) / 360.0 * n)
+    ytile = int((1.0 - math.log(math.tan(lat_rad) + (1 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
+    return (xtile, ytile)
+
+
+def centroid(bounds):
+    bounds = bounds['bounds']
+    lat = (bounds[1] + bounds[3]) / 2
+    lng = (bounds[0] + bounds[2]) / 2
+    return lat, lng
+
+
+def process_image(flyby):
+    z = 12
+    _, n, g, gg, year, month, day, i,_ = flyby.split("/")
+    scene_id = "S2A_tile_%s%s%s_%s%s%s_%s" % (year, month, day,
+                                              n, g, gg, i)
+    scene_id = 'S2A_tile_20171103_32TMT_0'
+    bounds = sentinel2.bounds(scene_id)
+    x, y = deg2num(*centroid(bounds), z)
+
+    tile = sentinel2.tile(scene_id, x, y, z, tilesize=512)
+    tile = img_as_float(tile)
+
+    r = tile[0, :, :]
+    g = tile[1, :, :]
+    b = tile[2, :, :]
+
+    r *= 0.93
+
+    rgb = np.dstack((r, g, b))
+    low, high = np.percentile(rgb, (1, 97))
+    rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
+    rgb = transform.resize(rgb, (1098*2, 1098*2))
+
+    directory_name = flyby.replace("/", "-")
+    directory_name = '/tmp/%s' % directory_name
+    os.makedirs(directory_name)
+
+    output_image_fname = directory_name + "/B.jpg"
+    io.imsave(output_image_fname, rgb, quality=90)
+
+    return output_image_fname
+
+
 def post_candidate(flyby, post=False, api=None):
     tile_info = get_tileinfo(flyby)
 
@@ -175,7 +229,7 @@ def post_candidate(flyby, post=False, api=None):
     coverage = float(tile_info.get('dataCoveragePercentage', 0.))
     complete = coverage > 99
     cloudy_pixels = float(tile_info.get('cloudyPixelPercentage', 0.))
-    cloudy =  cloudy_pixels > 35.
+    cloudy = cloudy_pixels > 35.
     interestingness = image_interestingness(flyby + "preview.jpg")
 
     MSG = "{location} ({lat_lng}), {date}"
@@ -194,8 +248,7 @@ def post_candidate(flyby, post=False, api=None):
                          lat_lng=format_lat_lng(lat, lng),
                          location=get_address(lat, lng)))
 
-        directory_name = get_bands(flyby)
-        image_fname = process_bands(directory_name)
+        image_fname = process_image(flyby)
 
         print(image_fname)
         print("Good enough for government work.")
@@ -204,11 +257,11 @@ def post_candidate(flyby, post=False, api=None):
             api.PostUpdate(MSG.format(date="%s %s %s" %(day, month, year),
                                       lat_lng=format_lat_lng(lat, lng),
                                       location=get_address(lat, lng)),
-                            media=image_fname,
-                            latitude=lat, longitude=lng,
-                            display_coordinates=True,
-                            )
-            shutil.rmtree(directory_name, ignore_errors=True)
+                           media=image_fname,
+                           latitude=lat, longitude=lng,
+                           display_coordinates=True,
+                           )
+            shutil.rmtree(os.path.dirname(image_fname), ignore_errors=True)
 
         return flyby
 
