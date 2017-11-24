@@ -3,4 +3,3 @@ numpy
 pyproj
 scipy
 scikit-image
-rasterio
