@@ -1,0 +1,2 @@
+pip install -e git+https://github.com/bear/python-twitter@d3eb170881b8fa81e06d6420b94d47131e5e9699#egg=python-twitter
+pip install -e git+https://github.com/betatim/rio-tiler@d05977f325087996bb3bd3e8e5e3708476abf993#egg=rio-tiler
