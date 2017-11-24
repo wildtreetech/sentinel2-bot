@@ -72,7 +72,7 @@ def image_interestingness(prefix):
     return (red + green) / 2 / blue
 
 
-def get_position(geometry):
+def get_position(flyby):
     """Extract coordinates of this image"""
     _, n, g, gg, year, month, day, i,_ = flyby.split("/")
     scene_id = "S2A_tile_%s%02i%02i_%02i%s%s_%s" % (year, int(month), int(day),
@@ -160,7 +160,7 @@ def process_image(flyby):
 
     tile = sentinel2.tile(scene_id, x, y, z, tilesize=1098*2)
 
-    tile = np.swapaxes(tile, 0, 2)
+    tile = np.transpose(tile, (1, 2, 0))
 
     tile[0, :, :] = tile[0, :, :] * 0.93
     rgb = tile
@@ -176,7 +176,7 @@ def process_image(flyby):
 def post_candidate(flyby, post=False, api=None):
     tile_info = get_tileinfo(flyby)
 
-    lat, lng = get_position(tile_info['tileGeometry'])
+    lat, lng = get_position(flyby)
 
     coverage = float(tile_info.get('dataCoveragePercentage', 0.))
     complete = coverage > 99
