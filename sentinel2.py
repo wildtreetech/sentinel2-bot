@@ -74,12 +74,12 @@ def image_interestingness(prefix):
 
 def get_position(geometry):
     """Extract coordinates of this image"""
-    coords = geometry['coordinates'][0]
-    crs = int(geometry['crs']['properties']['name'].split(":")[-1])
-    projection = pyproj.Proj(init='epsg:%i' % crs)
-    coords = [(projection(*c, inverse=True)[1], projection(*c, inverse=True)[0])
-              for c in coords]
-    return np.mean(coords, axis=0)
+    _, n, g, gg, year, month, day, i,_ = flyby.split("/")
+    scene_id = "S2A_tile_%s%02i%02i_%02i%s%s_%s" % (year, int(month), int(day),
+                                                    int(n), g, gg, i)
+    #scene_id = 'S2A_tile_20171103_32TMT_0'
+    bounds = sentinel2.bounds(scene_id)
+    return centroid(bounds)
 
 
 def get_address(lat, lng):
@@ -152,8 +152,8 @@ def process_image(flyby):
 
     z = 10
     _, n, g, gg, year, month, day, i,_ = flyby.split("/")
-    scene_id = "S2A_tile_%s%02i%02i_%s%s%s_%s" % (year, int(month), int(day),
-                                                n, g, gg, i)
+    scene_id = "S2A_tile_%s%02i%02i_%02i%s%s_%s" % (year, int(month), int(day),
+                                                    int(n), g, gg, i)
     #scene_id = 'S2A_tile_20171103_32TMT_0'
     bounds = sentinel2.bounds(scene_id)
     x, y = deg2num(*centroid(bounds), z)
