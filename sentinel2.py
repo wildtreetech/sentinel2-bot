@@ -16,9 +16,7 @@ import pyproj
 
 from skimage import novice
 from skimage import io
-from skimage import transform
 from skimage import exposure
-from skimage import img_as_float
 
 from rio_tiler import sentinel2
 
@@ -160,19 +158,15 @@ def process_image(flyby):
     bounds = sentinel2.bounds(scene_id)
     x, y = deg2num(*centroid(bounds), z)
 
-    tile = sentinel2.tile(scene_id, x, y, z, tilesize=4000)
-    tile = img_as_float(tile)
+    tile = sentinel2.tile(scene_id, x, y, z, tilesize=1098*2)
 
-    r = tile[0, :, :]
-    g = tile[1, :, :]
-    b = tile[2, :, :]
+    tile = np.swapaxes(tile, 0, 2)
 
-    r *= 0.93
+    tile[0, :, :] = tile[0, :, :] * 0.93
+    rgb = tile
 
-    rgb = np.dstack((r, g, b))
     low, high = np.percentile(rgb, (1, 97))
     rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
-    rgb = transform.resize(rgb, (1098*2, 1098*2))
 
     io.imsave(output_image_fname, rgb, quality=90)
 
