@@ -12,8 +12,6 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-import pyproj
-
 from skimage import novice
 from skimage import io
 from skimage import exposure
@@ -150,13 +148,14 @@ def process_image(flyby):
 
     os.makedirs(directory_name)
 
-    z = 10
-    _, n, g, gg, year, month, day, i,_ = flyby.split("/")
+    z = 12
+    _, n, g, gg, year, month, day, i, _ = flyby.split("/")
     scene_id = "S2A_tile_%s%02i%02i_%02i%s%s_%s" % (year, int(month), int(day),
                                                     int(n), g, gg, i)
     #scene_id = 'S2A_tile_20171103_32TMT_0'
     bounds = sentinel2.bounds(scene_id)
     x, y = deg2num(*centroid(bounds), z)
+    #x, y = deg2num(20.820567, 92.367358, z)
 
     tile = sentinel2.tile(scene_id, x, y, z, tilesize=1098*2)
 
@@ -183,13 +182,14 @@ def post_candidate(flyby, post=False, api=None):
     complete = coverage > 80
     cloudy_pixels = float(tile_info.get('cloudyPixelPercentage', 0.))
     cloudy = cloudy_pixels > 35.
+    cloudy = cloudy_pixels > 135.
     interestingness = image_interestingness(flyby + "preview.jpg")
 
     MSG = "{location} ({lat_lng}), {date}"
 
     print('coverage:', coverage, 'clouds:', cloudy_pixels,
           '(R+G)/2/B %.1f' % interestingness)
-    if (complete and not cloudy and (interestingness > 0.8)):
+    if (complete and not cloudy and (interestingness > 0.008)):
         print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
         print('(R+G)/2/B %.1f' % interestingness)
         print(lat, lng, get_address(lat, lng))
@@ -314,6 +314,11 @@ if __name__ == "__main__":
     elif flyby == 'forever':
         api = twitter.Api(**twitter_credentials())
         loop(api, seed=seed)
+
+    elif flyby == 'random-post':
+        flybys = random_candidate(seed=seed, max_retries=2000, n_successes=1)
+        api = twitter.Api(**twitter_credentials())
+        post_candidate(flybys[0], api=api, post=True)
 
     else:
         api = twitter.Api(**twitter_credentials())
