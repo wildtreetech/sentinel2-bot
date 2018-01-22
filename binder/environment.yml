@@ -46,7 +46,7 @@ dependencies:
 - readline=6.2
 - s3transfer=0.1.10
 - scikit-image
-- scipy=
+- scipy
 - simplegeneric=0.8.1
 - sip=4.18
 - six=1.10.0
