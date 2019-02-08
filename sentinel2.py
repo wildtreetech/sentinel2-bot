@@ -1,27 +1,60 @@
-import calendar
+import argparse
+import logging
 import json
-import math
 import os
 import random
-import requests
-import shutil
 import time
 import unicodedata
-import urllib
+
+from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
+
+import requests
 
 import numpy as np
 
-from skimage import novice
+import mercantile
+import rasterio
+
+from google.cloud import storage
+
+from rasterio.vrt import WarpedVRT
+
 from skimage import io
 from skimage import exposure
-
-from rio_tiler import sentinel2
+from skimage import transform
 
 import twitter
 
 
-BASE_URL = "http://sentinel-s2-l1c.s3.amazonaws.com/"
+logging.basicConfig(
+    level=logging.INFO,
+    datefmt="%X",
+    format="%(asctime)s %(levelname)-8s %(message)s",
+)
+
+storage_client = storage.Client()
+bucket_name = "gcp-public-data-sentinel-2"
+
+
+def twitter_credentials():
+    return dict(
+        consumer_key=os.getenv("CONSUMER_KEY"),
+        consumer_secret=os.getenv("CONSUMER_SECRET"),
+        access_token_key=os.getenv("ACCESS_TOKEN_KEY"),
+        access_token_secret=os.getenv("ACCESS_TOKEN_SECRET"),
+    )
+
+
+def count_pixels(img, colour=[0.0, 0.0, 0.0]):
+    """Count pixels that are specified colour"""
+    return np.sum(
+        np.logical_and(
+            img[:, :, 0] == colour[0],
+            img[:, :, 1] == colour[1],
+            img[:, :, 2] == colour[2],
+        )
+    )
 
 
 def random_mgrs(seed=657):
@@ -33,75 +66,34 @@ def random_mgrs(seed=657):
     return (gzd, sqid, "%s%s" % (col, row))
 
 
-def get_listing(prefix):
-    r = requests.get(BASE_URL + "?delimiter=/&prefix=%s" % prefix)
-    text = r.text
-    if 'CommonPrefixes' in text:
-        root = ET.fromstring(r.text)
-        prefixes = []
-        for p in root.iter('{http://s3.amazonaws.com/doc/2006-03-01/}CommonPrefixes'):
-            prefixes.append(p[0].text)
-        return prefixes
-    else:
-        return []
-
-
-def get_tileinfo(prefix):
-    print(BASE_URL + prefix + 'tileInfo.json')
-    r = requests.get(BASE_URL + prefix + 'tileInfo.json')
-    return json.loads(r.text)
-
-
-def not_nan(x):
-    return x[~np.isnan(x)]
-
-
-def image_interestingness(prefix):
-    """Calculate how visually interesting a picture is."""
-    try:
-        img = novice.open(BASE_URL + prefix).xy_array
-    except (requests.HTTPError, urllib.error.HTTPError):
-        return -1.
-
-    red = img[:,:,0].mean()
-    green = img[:,:,1].mean()
-    blue = img[:,:,2].mean()
-
-    return (red + green) / 2 / blue
-
-
-def get_position(flyby):
-    """Extract coordinates of this image"""
-    _, n, g, gg, year, month, day, i,_ = flyby.split("/")
-    scene_id = "S2A_tile_%s%02i%02i_%02i%s%s_%s" % (year, int(month), int(day),
-                                                    int(n), g, gg, i)
-    #scene_id = 'S2A_tile_20171103_32TMT_0'
-    bounds = sentinel2.bounds(scene_id)
-    return centroid(bounds)
-
-
 def get_address(lat, lng):
     """Convert latitude and longitude into an address using OSM"""
+
     def _norm_len(s):
-        return len(unicodedata.normalize("NFC", s).encode('utf-8'))
+        return len(unicodedata.normalize("NFC", s).encode("utf-8"))
+
     def _cut(s, max_len=72):
-        if _norm_len(s) < max_len: return s
+        if _norm_len(s) < max_len:
+            return s
         while _norm_len(s) >= max_len:
             ss = s.split(",")
-            s = ', '.join([x.strip() for x in ss[1:]])
+            s = ", ".join([x.strip() for x in ss[1:]])
         return s
 
     # otherwise we get unicode mixed with latin which often exceeds
     # the 140character limit of twitter :(
-    headers = {'Accept-Language': "en-US,en;q=0.8"}
-    nominatim_url = ("http://nominatim.openstreetmap.org/reverse?lat=%f&lon=%f&"
-                     "addressdetails=0&format=json&zoom=6&extratags=0")
-    info = json.loads(requests.get(nominatim_url % (lat, lng),
-                                   headers=headers).text)
-    if 'error' in info:
-        return 'Unknown location, do you know it? Tell @openstreetmap'
+    headers = {"Accept-Language": "en-US,en;q=0.8"}
+    nominatim_url = (
+        "http://nominatim.openstreetmap.org/reverse?lat=%f&lon=%f&"
+        "addressdetails=0&format=json&zoom=6&extratags=0"
+    )
+    info = json.loads(
+        requests.get(nominatim_url % (lat, lng), headers=headers).text
+    )
+    if "error" in info:
+        return "Unknown location, do you recognise it?"
 
-    return _cut(info['display_name'])
+    return _cut(info["display_name"])
 
 
 def format_lat_lng(lat, lng):
@@ -121,205 +113,203 @@ def format_lat_lng(lat, lng):
     return s
 
 
-def deg2num(lat_deg, lon_deg, zoom):
-    lat_rad = math.radians(lat_deg)
-    n = 2.0 ** zoom
-    xtile = int((lon_deg + 180.0) / 360.0 * n)
-    ytile = int((1.0 - math.log(math.tan(lat_rad) + (1 / math.cos(lat_rad))) / math.pi) / 2.0 * n)
-    return (xtile, ytile)
+def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
+    satellite = "/S2%s_" % satellite
+
+    bucket = storage_client.get_bucket(bucket_name)
+    blobs = list(bucket.list_blobs(prefix="tiles/%i/%s/%s/" % area))
+    if not blobs:
+        return None
+
+    blobs = [b for b in blobs if satellite in b.name]
+
+    band2s = [b for b in blobs if b.name.endswith("B02.jp2")]
+    # go up a few levels to find the meta data XML file
+    cloud_meta = [
+        "/".join(c.name.split("/")[:-4] + ["MTD_MSIL1C.xml"]) for c in band2s
+    ]
+
+    cloud_free = []
+    for band, cloud in zip(reversed(band2s), reversed(cloud_meta)):
+        meta_blob = bucket.blob(cloud)
+        try:
+            xml = ET.fromstring(meta_blob.download_as_string())
+        except Exception:
+            continue
+
+        cloud_cover = float(next(xml.iter("Cloud_Coverage_Assessment")).text)
+        if cloud_cover > 70:
+            continue
+
+        logging.info(
+            "Picked %s with cloud coverage of %i%%."
+            % (cloud.rsplit("/", 1)[0], cloud_cover)
+        )
+
+        cloud_free.append(band.name.replace("_B02.jp2", "_B0%i.jp2"))
+
+        # only go back far enough to be able to fullfill skip request
+        if len(cloud_free) > skip:
+            break
+
+    if not cloud_free:
+        return None
+
+    # skip as many as possible, default to last available
+    return cloud_free[max(-len(cloud_free), -skip)]
 
 
-def centroid(bounds):
-    bounds = bounds['bounds']
-    lat = (bounds[1] + bounds[3]) / 2
-    lng = (bounds[0] + bounds[2]) / 2
-    return lat, lng
+def sentinel2_bot(
+    seed=None, post=True, loop=False, clean_up=False, period=60 * 60, mgrs=None
+):
+    last_post = time.time() - period
 
+    rng = random.Random(seed)
+    seed = rng.randint(1, 2 ** 64)
 
-def process_image(flyby):
-    directory_name = flyby.replace("/", "-")
-    directory_name = '/tmp/%s' % directory_name
-    output_image_fname = directory_name + "/B.jpg"
+    if mgrs is None:
+        mgrs_ = random_mgrs(seed=seed)
+    else:
+        mgrs_ = mgrs
 
-    # if the image already exists, there is nothing to do. This adds a simple
-    # mechanism for caching results
-    if os.path.exists(output_image_fname):
-        return output_image_fname
+    forever = True
+    while forever:
+        picked = None
+        while picked is None:
+            seed += 1
+            mgrs_ = random_mgrs(seed=seed)
+            logging.info("Trying MGRS: %s" % (mgrs_,))
+            picked = pick_date(area=mgrs_)  # , skip=2)
 
-    os.makedirs(directory_name)
+        bucket = storage_client.get_bucket(bucket_name)
 
-    z = 12
-    _, n, g, gg, year, month, day, i, _ = flyby.split("/")
-    scene_id = "S2A_tile_%s%02i%02i_%02i%s%s_%s" % (year, int(month), int(day),
-                                                    int(n), g, gg, i)
-    #scene_id = 'S2A_tile_20171103_32TMT_0'
-    bounds = sentinel2.bounds(scene_id)
-    x, y = deg2num(*centroid(bounds), z)
-    #x, y = deg2num(20.820567, 92.367358, z)
+        bands = []
+        transformed_bands = []
+        for band in (4, 3, 2):
+            blob = bucket.blob(picked % band)
 
-    tile = sentinel2.tile(scene_id, x, y, z, tilesize=1098*2)
+            with TemporaryDirectory() as d:
+                b3 = os.path.join(d, "b.jp2")
+                blob.download_to_filename(b3)
+                with rasterio.open(b3) as src:
+                    lng, lat = src.lnglat()
+                    logging.info("Coordinate of the tile: %f, %f" % (lat, lng))
+                    tile = mercantile.tile(lng, lat, 10)
+                    merc_bounds = mercantile.xy_bounds(tile)
+                    with WarpedVRT(src, dst_crs="epsg:3857") as vrt:
+                        window = vrt.window(*merc_bounds)
+                        arr_transform = vrt.window_transform(window)
+                        arr = vrt.read(window=window)
+                        bands.append(arr)
+                        transformed_bands.append(arr_transform)
 
-    tile = np.transpose(tile, (1, 2, 0))
+        logging.info("Address: %s" % get_address(lat, lng))
 
-    tile[0, :, :] = tile[0, :, :] * 0.93
-    rgb = tile
+        # normal window
+        rgb = np.stack([a.squeeze(0) for a in bands])
 
-    low, high = np.percentile(rgb, (1, 97))
-    rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
+        rgb = np.moveaxis(rgb, 0, -1)
+        logging.info("Image dimensions %s." % (rgb.shape,))
 
-    io.imsave(output_image_fname, rgb, quality=90)
+        # count fraction of exactly black pixels, this happens with
+        # partial acquisitions
+        black = count_pixels(rgb)
+        print(black, rgb.shape[0], rgb.shape[1])
+        if black / (rgb.shape[0] * rgb.shape[1]) > 0.3:
+            logging.info("Skipping image because it is incomplete.")
+            continue
 
-    return output_image_fname
+        low, high = np.percentile(rgb, (1, 97))
+        rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
+        if exposure.is_low_contrast(rgb):
+            logging.info("Skipping image because it is low contrast")
+            continue
 
+        fname = picked.split("/")[-1]
+        identifier, _ = fname.rsplit("_", 1)
+        fname = "/tmp/%s_rgb.jpg" % identifier
+        fname_small = "/tmp/%s_rgb_small.jpg" % identifier
 
-def post_candidate(flyby, post=False, api=None):
-    tile_info = get_tileinfo(flyby)
+        io.imsave(fname, rgb, quality=90)
+        io.imsave(
+            fname_small,
+            transform.resize(rgb, (1098 * 2, 1098 * 2)),
+            quality=90,
+        )
 
-    lat, lng = get_position(flyby)
+        date = identifier[7:-7]
+        day = date[-2:]
+        month = date[-4:-2]
+        year = date[:4]
 
-    coverage = float(tile_info.get('dataCoveragePercentage', 0.))
-    complete = coverage > 99
-    complete = coverage > 80
-    cloudy_pixels = float(tile_info.get('cloudyPixelPercentage', 0.))
-    cloudy = cloudy_pixels > 35.
-    cloudy = cloudy_pixels > 135.
-    interestingness = image_interestingness(flyby + "preview.jpg")
-
-    MSG = "{location} ({lat_lng}), {date}"
-
-    print('coverage:', coverage, 'clouds:', cloudy_pixels,
-          '(R+G)/2/B %.1f' % interestingness)
-    if (complete and not cloudy and (interestingness > 0.008)):
-        print('Cloudy: %.2f Coverage: %.2f' % (cloudy_pixels, coverage))
-        print('(R+G)/2/B %.1f' % interestingness)
-        print(lat, lng, get_address(lat, lng))
-        parts = flyby.split('/')
-        day = parts[-3]
-        month = calendar.month_name[int(parts[-4])]
-        year = parts[-5]
-        print(MSG.format(date="%s %s %s" %(day, month, year),
-                         lat_lng=format_lat_lng(lat, lng),
-                         location=get_address(lat, lng)))
-
-        image_fname = process_image(flyby)
-
-        print(image_fname)
-        print("Good enough for government work.")
+        MSG = "{location} ({lat_lng}), {date}"
+        msg = MSG.format(
+            date="%s %s %s" % (day, month, year),
+            lat_lng=format_lat_lng(lat, lng),
+            location=get_address(lat, lng),
+        )
+        logging.info("Twitter message: %s" % msg)
+        delta = period - (time.time() - last_post)
+        if delta > 0.0:
+            logging.info("Sleeping for %is before posting." % delta)
+            time.sleep(delta)
 
         if post:
-            api.PostUpdate(MSG.format(date="%s %s %s" %(day, month, year),
-                                      lat_lng=format_lat_lng(lat, lng),
-                                      location=get_address(lat, lng)),
-                           media=image_fname,
-                           latitude=lat, longitude=lng,
-                           display_coordinates=True,
-                           )
-            shutil.rmtree(os.path.dirname(image_fname), ignore_errors=True)
+            twitter_api = twitter.Api(**twitter_credentials())
+            logging.info("Posting to twitter.")
+            twitter_api.PostUpdate(
+                msg,
+                media=fname_small,
+                latitude=lat,
+                longitude=lng,
+                display_coordinates=True,
+            )
 
-        return flyby
+        if clean_up:
+            logging.info("Removing image %s." % fname)
+            os.remove(fname)
+            logging.info("Removing image %s." % fname_small)
+            os.remove(fname_small)
 
-    return False
-
-
-def random_candidate(max_retries=100, n_successes=None, seed=2,
-                     post=False, api=None):
-    """Pick random coordinates and check if there is an image there.
-
-    Will guess up to `max_retries` coordinates and check if there
-    is an image available for them. Will stop after posting the first
-    image to twitter if `post=True` or once it has found `n_successes`.
-    """
-    rng = random.Random(seed)
-
-    good_flybys = []
-    for n in range(max_retries):
-        url = "tiles/%s/%s/%s/" % random_mgrs(seed=rng.randint(1,2**64))
-        years = get_listing(url)
-        if years:
-            year = rng.choice(years)
-            months = get_listing(year)
-            if months:
-                month = rng.choice(months)
-                days = get_listing(month)
-                if days:
-                    day = rng.choice(days)
-                    flybys = get_listing(day)
-                    flyby = rng.choice(flybys)
-
-                    print("Iteration:", n, flyby)
-                    print(BASE_URL + flyby + "preview.jpg")
-
-                    try:
-                        good_flyby = post_candidate(flyby, post=post, api=api)
-                    except urllib.error.HTTPError:
-                        time.sleep(1)
-                        continue
-
-                    if good_flyby:
-                        # posting, so stop after one image
-                        if post:
-                            return None
-
-                        # collecting/caching images
-                        good_flybys.append(good_flyby)
-                        if (n_successes is not None and
-                            n_successes <= len(good_flybys)):
-                            return good_flybys
-
-                    time.sleep(0.5)
-
-
-def twitter_credentials():
-    return dict(consumer_key=os.getenv("CONSUMER_KEY"),
-                consumer_secret=os.getenv("CONSUMER_SECRET"),
-                access_token_key=os.getenv("ACCESS_TOKEN_KEY"),
-                access_token_secret=os.getenv("ACCESS_TOKEN_SECRET"))
-
-
-def loop(twitter, period=3600, seed=2):
-    """Keep running for ever and ever and ever.
-
-    Will post an image to twitter every `period` seconds.
-    """
-    # first find an image and process it. Then sleep till
-    # it is time to post it, then look for the next image, then go to sleep,...
-    # this way it should be easier to post on time
-    rng = random.Random(seed)
-
-    cached_flybys = random_candidate(max_retries=2000, n_successes=1,
-                                     seed=rng.randint(1, 2**64))
-
-    while True:
-        flyby = cached_flybys.pop()
-        good_flyby = post_candidate(flyby, post=True, api=twitter)
-        last_post = time.time()
-
-        cached_flybys += random_candidate(max_retries=2000, n_successes=1,
-                                          seed=rng.randint(1, 2**64))
-
-        time.sleep(period - (time.time() - last_post))
+        if not loop:
+            forever = False
 
 
 if __name__ == "__main__":
-    import sys
-    flyby = sys.argv[1]
-    if len(sys.argv) == 3:
-        seed = sys.argv[2]
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument(
+        "--seed",
+        help="Seed for random number generator",
+        default=random.randint(1, 2 ** 64),
+    )
+    argparser.add_argument(
+        "--post", help="Post to twitter", action="store_true"
+    )
+    argparser.add_argument("--loop", help="Loop forever", action="store_true")
+    argparser.add_argument(
+        "--period",
+        help="Minimum delay between imaging loops in seconds",
+        type=int,
+        default=60 * 60,
+    )
+    argparser.add_argument("--mgrs", help="MGRS to use")
+    args = argparser.parse_args()
+
+    if args.mgrs:
+        loop = False
     else:
-        seed = random.randint(1,2**64)
+        loop = args.loop
 
-    if flyby == 'random':
-        random_candidate(seed=seed, max_retries=2000, n_successes=1)
-
-    elif flyby == 'forever':
-        api = twitter.Api(**twitter_credentials())
-        loop(api, seed=seed)
-
-    elif flyby == 'random-post':
-        flybys = random_candidate(seed=seed, max_retries=2000, n_successes=1)
-        api = twitter.Api(**twitter_credentials())
-        post_candidate(flybys[0], api=api, post=True)
-
+    if args.mgrs:
+        mgrs = args.mgrs.split("/")
+        mgrs = int(mgrs[0]), mgrs[1], mgrs[2]
     else:
-        api = twitter.Api(**twitter_credentials())
-        post_candidate(flyby, api=api, post=True)
+        mgrs = None
+
+    sentinel2_bot(
+        seed=args.seed,
+        post=args.post,
+        loop=loop,
+        period=args.period,
+        mgrs=mgrs,
+    )
