@@ -1,0 +1,3 @@
+pip install numpy
+pip install -e git+https://github.com/bear/python-twitter@d3eb170881b8fa81e06d6420b94d47131e5e9699#egg=python-twitter
+pip install -e git+https://github.com/betatim/rio-tiler@3faa7b7e6ec9f8469de6e36a6fecdc5032ced980#egg=rio-tiler
