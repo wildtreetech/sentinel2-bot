@@ -28,6 +28,7 @@ from skimage import transform
 import twitter
 
 import matplotlib
+
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
 
@@ -47,6 +48,20 @@ VALID_MGRS = []
 with open(os.path.join(HERE, "valid_mgrs")) as f:
     for mgrs in f:
         VALID_MGRS.append((int(mgrs[:2]), mgrs[2:3], mgrs[3:5]))
+
+MONTHS = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Oct",
+    "Nov",
+    "Dec",
+]
 
 
 def twitter_credentials():
@@ -141,7 +156,9 @@ def colour_balance_image(image):
 def list_blobs(params):
     while True:
         try:
-            return list(BUCKET.list_blobs(prefix="tiles/%i/%s/%s/S2%s_MSIL1C" % params))
+            return list(
+                BUCKET.list_blobs(prefix="tiles/%i/%s/%s/S2%s_MSIL1C" % params)
+            )
         except Exception:
             logging.info("Sleeping for 5s")
             time.sleep(5)
@@ -151,7 +168,7 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
     params = area + (satellite,)
     blobs = list_blobs(params)
     if not blobs:
-        logging.info("No blobs for MGRS: %s" % area)
+        logging.info("No blobs for MGRS: %s" % (area,))
         return None
 
     # blobs = [b for b in blobs if satellite in b.name]
@@ -265,25 +282,43 @@ def sentinel2_bot(
             logging.info("Skipping image because it is incomplete.")
             continue
 
-        rgb[:,:,1] = rgb[:,:,1] * 1.12
+        rgb[:, :, 1] = rgb[:, :, 1] * 1.12
 
         low, high = np.percentile(rgb, (1, 99))
         rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
 
-        #rgb = colour_balance_image(rgb)
+        # rgb = colour_balance_image(rgb)
 
-        #if exposure.is_low_contrast(rgb):
+        # if exposure.is_low_contrast(rgb):
         #    logging.info("Skipping image because it is low contrast")
         #    continue
 
         if False:
-            plt.hist(rgb[:,:,0].ravel(), bins=256, color='r',
-                     range=(0, 2**16), histtype='step', label='red')
-            plt.hist(rgb[:,:,1].ravel(), bins=256, color='g',
-                     range=(0, 2**16), histtype='step', label='green')
-            plt.hist(rgb[:,:,2].ravel(), bins=256, color='b',
-                     range=(0, 2**16), histtype='step', label='blue')
-            plt.legend(loc='best')
+            plt.hist(
+                rgb[:, :, 0].ravel(),
+                bins=256,
+                color="r",
+                range=(0, 2 ** 16),
+                histtype="step",
+                label="red",
+            )
+            plt.hist(
+                rgb[:, :, 1].ravel(),
+                bins=256,
+                color="g",
+                range=(0, 2 ** 16),
+                histtype="step",
+                label="green",
+            )
+            plt.hist(
+                rgb[:, :, 2].ravel(),
+                bins=256,
+                color="b",
+                range=(0, 2 ** 16),
+                histtype="step",
+                label="blue",
+            )
+            plt.legend(loc="best")
             plt.show()
 
         os.makedirs(output, exist_ok=True)
@@ -302,7 +337,7 @@ def sentinel2_bot(
 
         date = identifier[7:-7]
         day = date[-2:]
-        month = date[-4:-2]
+        month = MONTHS[int(date[-4:-2])]
         year = date[:4]
 
         MSG = "{location} ({lat_lng}), {date}"
@@ -323,7 +358,7 @@ def sentinel2_bot(
             logging.info("Posting to twitter.")
             twitter_api.PostUpdate(
                 msg,
-                media=fname_small,
+                media=[fname_small],
                 latitude=lat,
                 longitude=lng,
                 display_coordinates=True,
@@ -352,6 +387,9 @@ if __name__ == "__main__":
         "--post", help="Post to twitter", action="store_true"
     )
     argparser.add_argument("--loop", help="Loop forever", action="store_true")
+    argparser.add_argument(
+        "--clean-up", help="Clean up outputs", action="store_true"
+    )
     argparser.add_argument("--output", help="Output directory", default="/tmp")
     argparser.add_argument(
         "--period",
@@ -380,4 +418,5 @@ if __name__ == "__main__":
         period=args.period,
         mgrs=mgrs,
         output=args.output,
+        clean_up=args.clean_up,
     )
