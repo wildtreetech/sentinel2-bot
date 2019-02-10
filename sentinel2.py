@@ -6,6 +6,7 @@ import random
 import time
 import unicodedata
 
+from functools import lru_cache
 from tempfile import TemporaryDirectory
 import xml.etree.ElementTree as ET
 
@@ -26,6 +27,10 @@ from skimage import transform
 
 import twitter
 
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +40,12 @@ logging.basicConfig(
 
 storage_client = storage.Client()
 bucket_name = "gcp-public-data-sentinel-2"
+BUCKET = storage_client.get_bucket(bucket_name)
+
+VALID_MGRS = []
+with open("valid_mgrs") as f:
+    for mgrs in f:
+        VALID_MGRS.append((int(mgrs[:2]), mgrs[2:3], mgrs[3:5]))
 
 
 def twitter_credentials():
@@ -59,11 +70,12 @@ def count_pixels(img, colour=[0.0, 0.0, 0.0]):
 
 def random_mgrs(seed=657):
     rng = random.Random(seed)
-    gzd = rng.choice(range(1, 61))
+    return rng.choice(VALID_MGRS)
+    x = """gzd = rng.choice(range(1, 61))
     sqid = rng.choice("CDEFGHJKLMNPQRSTUVWX")
     col = rng.choice("ABCDEFGHJKLMNPQRSTUVWXYZ")
     row = rng.choice("ABCDEFGHJKLMNPQRSTUV")
-    return (gzd, sqid, "%s%s" % (col, row))
+    return (gzd, sqid, "%s%s" % (col, row))"""
 
 
 def get_address(lat, lng):
@@ -113,15 +125,35 @@ def format_lat_lng(lat, lng):
     return s
 
 
-def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
-    satellite = "/S2%s_" % satellite
+def colour_balance_image(image):
+    image = image / (image.max())
+    image = exposure.adjust_log(image, 1)
+    # image = exposure.equalize_adapthist(image, nbins=512, clip_limit=0.01)
+    mean = image.mean()
+    scalar = 0.5 / mean
+    image = image * scalar
+    image = image.clip(0.0, 1.0)
+    return image
 
-    bucket = storage_client.get_bucket(bucket_name)
-    blobs = list(bucket.list_blobs(prefix="tiles/%i/%s/%s/" % area))
+
+@lru_cache(maxsize=256)
+def list_blobs(params):
+    while True:
+        try:
+            return list(BUCKET.list_blobs(prefix="tiles/%i/%s/%s/S2%s_MSIL1C" % params))
+        except Exception:
+            logging.info("Sleeping for 5s")
+            time.sleep(5)
+
+
+def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
+    params = area + (satellite,)
+    blobs = list_blobs(params)
     if not blobs:
+        logging.info("No blobs for MGRS: %s" % area)
         return None
 
-    blobs = [b for b in blobs if satellite in b.name]
+    # blobs = [b for b in blobs if satellite in b.name]
 
     band2s = [b for b in blobs if b.name.endswith("B02.jp2")]
     # go up a few levels to find the meta data XML file
@@ -131,14 +163,16 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
 
     cloud_free = []
     for band, cloud in zip(reversed(band2s), reversed(cloud_meta)):
-        meta_blob = bucket.blob(cloud)
+        meta_blob = BUCKET.blob(cloud)
         try:
             xml = ET.fromstring(meta_blob.download_as_string())
         except Exception:
+            logging.info("Error parsing metadata XML.")
             continue
 
         cloud_cover = float(next(xml.iter("Cloud_Coverage_Assessment")).text)
         if cloud_cover > 70:
+            logging.debug("Skipping because of cloud coverage.")
             continue
 
         logging.info(
@@ -160,7 +194,13 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
 
 
 def sentinel2_bot(
-    seed=None, post=True, loop=False, clean_up=False, period=60 * 60, mgrs=None
+    seed=None,
+    post=True,
+    loop=False,
+    clean_up=False,
+    period=60 * 60,
+    mgrs=None,
+    output="/tmp",
 ):
     last_post = time.time() - period
 
@@ -174,19 +214,24 @@ def sentinel2_bot(
 
     forever = True
     while forever:
-        picked = None
-        while picked is None:
-            seed += 1
-            mgrs_ = random_mgrs(seed=seed)
-            logging.info("Trying MGRS: %s" % (mgrs_,))
-            picked = pick_date(area=mgrs_)  # , skip=2)
+        time.sleep(1.5)
+        if mgrs is None:
+            picked = None
+            while picked is None:
+                time.sleep(1.5)
+                seed += 1
+                mgrs_ = random_mgrs(seed=seed)
+                logging.info("Trying MGRS: %s" % (mgrs_,))
+                picked = pick_date(area=mgrs_)  # , skip=2)
+        else:
+            picked = pick_date(area=mgrs_)
 
-        bucket = storage_client.get_bucket(bucket_name)
+        logging.info("Picked MGRS: %s" % (mgrs_,))
 
         bands = []
         transformed_bands = []
         for band in (4, 3, 2):
-            blob = bucket.blob(picked % band)
+            blob = BUCKET.blob(picked % band)
 
             with TemporaryDirectory() as d:
                 b3 = os.path.join(d, "b.jp2")
@@ -219,16 +264,33 @@ def sentinel2_bot(
             logging.info("Skipping image because it is incomplete.")
             continue
 
-        low, high = np.percentile(rgb, (1, 97))
+        rgb[:,:,1] = rgb[:,:,1] * 1.12
+
+        low, high = np.percentile(rgb, (1, 99))
         rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
-        if exposure.is_low_contrast(rgb):
-            logging.info("Skipping image because it is low contrast")
-            continue
+
+        #rgb = colour_balance_image(rgb)
+
+        #if exposure.is_low_contrast(rgb):
+        #    logging.info("Skipping image because it is low contrast")
+        #    continue
+
+        if False:
+            plt.hist(rgb[:,:,0].ravel(), bins=256, color='r',
+                     range=(0, 2**16), histtype='step', label='red')
+            plt.hist(rgb[:,:,1].ravel(), bins=256, color='g',
+                     range=(0, 2**16), histtype='step', label='green')
+            plt.hist(rgb[:,:,2].ravel(), bins=256, color='b',
+                     range=(0, 2**16), histtype='step', label='blue')
+            plt.legend(loc='best')
+            plt.show()
+
+        os.makedirs(output, exist_ok=True)
 
         fname = picked.split("/")[-1]
         identifier, _ = fname.rsplit("_", 1)
-        fname = "/tmp/%s_rgb.jpg" % identifier
-        fname_small = "/tmp/%s_rgb_small.jpg" % identifier
+        fname = "%s/%s_rgb.jpg" % (output, identifier)
+        fname_small = "%s/%s_rgb_small.jpg" % (output, identifier)
 
         io.imsave(fname, rgb, quality=90)
         io.imsave(
@@ -250,6 +312,7 @@ def sentinel2_bot(
         )
         logging.info("Twitter message: %s" % msg)
         delta = period - (time.time() - last_post)
+
         if delta > 0.0:
             logging.info("Sleeping for %is before posting." % delta)
             time.sleep(delta)
@@ -274,6 +337,8 @@ def sentinel2_bot(
         if not loop:
             forever = False
 
+        last_post = time.time()
+
 
 if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
@@ -286,6 +351,7 @@ if __name__ == "__main__":
         "--post", help="Post to twitter", action="store_true"
     )
     argparser.add_argument("--loop", help="Loop forever", action="store_true")
+    argparser.add_argument("--output", help="Output directory", default="/tmp")
     argparser.add_argument(
         "--period",
         help="Minimum delay between imaging loops in seconds",
@@ -312,4 +378,5 @@ if __name__ == "__main__":
         loop=loop,
         period=args.period,
         mgrs=mgrs,
+        output=args.output,
     )
