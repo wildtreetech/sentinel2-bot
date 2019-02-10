@@ -185,7 +185,8 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
         try:
             xml = ET.fromstring(meta_blob.download_as_string())
         except Exception:
-            logging.info("Error parsing metadata XML.")
+            logging.info("Error parsing metadata XML. Sleep 2s.")
+            time.sleep(2)
             continue
 
         cloud_cover = float(next(xml.iter("Cloud_Coverage_Assessment")).text)
