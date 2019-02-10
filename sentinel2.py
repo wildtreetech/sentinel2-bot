@@ -14,12 +14,11 @@ import requests
 
 import numpy as np
 
-import mercantile
 import rasterio
 
 from google.cloud import storage
 
-from rasterio.vrt import WarpedVRT
+from rasterio.windows import Window
 
 from skimage import io
 from skimage import exposure
@@ -50,6 +49,7 @@ with open(os.path.join(HERE, "valid_mgrs")) as f:
         VALID_MGRS.append((int(mgrs[:2]), mgrs[2:3], mgrs[3:5]))
 
 MONTHS = [
+    "Padding to make the indexing right",
     "Jan",
     "Feb",
     "Mar",
@@ -58,6 +58,7 @@ MONTHS = [
     "Jun",
     "Jul",
     "Aug",
+    "Sep",
     "Oct",
     "Nov",
     "Dec",
@@ -87,11 +88,6 @@ def count_pixels(img, colour=[0.0, 0.0, 0.0]):
 def random_mgrs(seed=657):
     rng = random.Random(seed)
     return rng.choice(VALID_MGRS)
-    x = """gzd = rng.choice(range(1, 61))
-    sqid = rng.choice("CDEFGHJKLMNPQRSTUVWX")
-    col = rng.choice("ABCDEFGHJKLMNPQRSTUVWXYZ")
-    row = rng.choice("ABCDEFGHJKLMNPQRSTUV")
-    return (gzd, sqid, "%s%s" % (col, row))"""
 
 
 def get_address(lat, lng):
@@ -141,17 +137,6 @@ def format_lat_lng(lat, lng):
     return s
 
 
-def colour_balance_image(image):
-    image = image / (image.max())
-    image = exposure.adjust_log(image, 1)
-    # image = exposure.equalize_adapthist(image, nbins=512, clip_limit=0.01)
-    mean = image.mean()
-    scalar = 0.5 / mean
-    image = image * scalar
-    image = image.clip(0.0, 1.0)
-    return image
-
-
 @lru_cache(maxsize=256)
 def list_blobs(params):
     while True:
@@ -171,8 +156,6 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
         logging.info("No blobs for MGRS: %s" % (area,))
         return None
 
-    # blobs = [b for b in blobs if satellite in b.name]
-
     band2s = [b for b in blobs if b.name.endswith("B02.jp2")]
     # go up a few levels to find the meta data XML file
     cloud_meta = [
@@ -191,7 +174,7 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
 
         cloud_cover = float(next(xml.iter("Cloud_Coverage_Assessment")).text)
         if cloud_cover > 70:
-            logging.debug("Skipping because of cloud coverage.")
+            logging.info("Skipping because of cloud coverage.")
             continue
 
         logging.info(
@@ -209,7 +192,7 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
         return None
 
     # skip as many as possible, default to last available
-    return cloud_free[max(-len(cloud_free), -skip)]
+    return cloud_free[min(len(cloud_free), skip)]
 
 
 def sentinel2_bot(
@@ -220,6 +203,7 @@ def sentinel2_bot(
     period=60 * 60,
     mgrs=None,
     output="/tmp",
+    skip=0,
 ):
     last_post = time.time() - period
 
@@ -241,14 +225,13 @@ def sentinel2_bot(
                 seed += 1
                 mgrs_ = random_mgrs(seed=seed)
                 logging.info("Trying MGRS: %s" % (mgrs_,))
-                picked = pick_date(area=mgrs_)  # , skip=2)
+                picked = pick_date(area=mgrs_, skip=skip)
         else:
-            picked = pick_date(area=mgrs_)
+            picked = pick_date(area=mgrs_, skip=skip)
 
         logging.info("Picked MGRS: %s" % (mgrs_,))
 
         bands = []
-        transformed_bands = []
         for band in (4, 3, 2):
             blob = BUCKET.blob(picked % band)
 
@@ -258,14 +241,10 @@ def sentinel2_bot(
                 with rasterio.open(b3) as src:
                     lng, lat = src.lnglat()
                     logging.info("Coordinate of the tile: %f, %f" % (lat, lng))
-                    tile = mercantile.tile(lng, lat, 10)
-                    merc_bounds = mercantile.xy_bounds(tile)
-                    with WarpedVRT(src, dst_crs="epsg:3857") as vrt:
-                        window = vrt.window(*merc_bounds)
-                        arr_transform = vrt.window_transform(window)
-                        arr = vrt.read(window=window)
-                        bands.append(arr)
-                        transformed_bands.append(arr_transform)
+
+                    bands.append(
+                        src.read(window=Window(4392, 4392, 1098 * 2, 1098 * 2))
+                    )
 
         logging.info("Address: %s" % get_address(lat, lng))
 
@@ -288,11 +267,9 @@ def sentinel2_bot(
         low, high = np.percentile(rgb, (1, 99))
         rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
 
-        # rgb = colour_balance_image(rgb)
-
-        # if exposure.is_low_contrast(rgb):
-        #    logging.info("Skipping image because it is low contrast")
-        #    continue
+        if exposure.is_low_contrast(rgb):
+            logging.info("Skipping image because it is low contrast")
+            continue
 
         if False:
             plt.hist(
@@ -398,6 +375,9 @@ if __name__ == "__main__":
         type=int,
         default=60 * 60,
     )
+    argparser.add_argument(
+        "--skip", help="Skip this many images backwards", type=int, default=0
+    )
     argparser.add_argument("--mgrs", help="MGRS to use")
     args = argparser.parse_args()
 
@@ -420,4 +400,5 @@ if __name__ == "__main__":
         mgrs=mgrs,
         output=args.output,
         clean_up=args.clean_up,
+        skip=args.skip,
     )
