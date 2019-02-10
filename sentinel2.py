@@ -42,8 +42,9 @@ storage_client = storage.Client()
 bucket_name = "gcp-public-data-sentinel-2"
 BUCKET = storage_client.get_bucket(bucket_name)
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 VALID_MGRS = []
-with open("valid_mgrs") as f:
+with open(os.path.join(HERE, "valid_mgrs")) as f:
     for mgrs in f:
         VALID_MGRS.append((int(mgrs[:2]), mgrs[2:3], mgrs[3:5]))
 
