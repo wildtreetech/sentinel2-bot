@@ -262,10 +262,15 @@ def sentinel2_bot(
             logging.info("Skipping image because it is incomplete.")
             continue
 
-        rgb[:, :, 1] = rgb[:, :, 1] * 1.12
-
-        low, high = np.percentile(rgb, (1, 99))
-        rgb = exposure.rescale_intensity(rgb, in_range=(low, high))
+        # There should be no need to do weird things, just stretch each
+        # band individually. This works! The fact that (deep) oceans end
+        # up looking basically black makes sense because of how water reflects
+        # or doesn't(!!) reflect normally incident light.
+        for i in (0, 1, 2):
+            low, high = np.percentile(rgb[:, :, i], (1, 99))
+            rgb[:, :, i] = exposure.rescale_intensity(
+                rgb[:, :, i], in_range=(low, high)
+            )
 
         if exposure.is_low_contrast(rgb):
             logging.info("Skipping image because it is low contrast")
