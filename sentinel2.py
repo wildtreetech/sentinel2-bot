@@ -173,12 +173,12 @@ def pick_date(area=(32, "T", "MT"), satellite="A", skip=0):
             continue
 
         cloud_cover = float(next(xml.iter("Cloud_Coverage_Assessment")).text)
-        if cloud_cover > 70:
+        if cloud_cover > 20 or (0.2 < cloud_cover < 1.):
             logging.info("Skipping because of cloud coverage.")
             continue
 
         logging.info(
-            "Picked %s with cloud coverage of %i%%."
+            "Picked %s with cloud coverage of %.3f%%."
             % (cloud.rsplit("/", 1)[0], cloud_cover)
         )
 
@@ -266,11 +266,23 @@ def sentinel2_bot(
         # band individually. This works! The fact that (deep) oceans end
         # up looking basically black makes sense because of how water reflects
         # or doesn't(!!) reflect normally incident light.
+        median_intensities = np.array([0., 0., 0])
         for i in (0, 1, 2):
-            low, high = np.percentile(rgb[:, :, i], (1, 99))
+            low, high = np.percentile(rgb[:, :, i], (1, 97))
             rgb[:, :, i] = exposure.rescale_intensity(
                 rgb[:, :, i], in_range=(low, high)
             )
+            median_intensities[i] = np.median(rgb[:, :, i])
+            logging.info('median intensity: %s', np.median(rgb[:, :, i]))
+
+        if np.alltrue(median_intensities < 10000):
+            for i in (0, 1, 2):
+                low, high = np.percentile(rgb[:, :, i], (1, 91))
+                rgb[:, :, i] = exposure.rescale_intensity(
+                    rgb[:, :, i], in_range=(low, high)
+                )
+                median_intensities[i] = np.median(rgb[:, :, i])
+                logging.info('median intensity: %s', np.median(rgb[:, :, i]))
 
         if exposure.is_low_contrast(rgb):
             logging.info("Skipping image because it is low contrast")
