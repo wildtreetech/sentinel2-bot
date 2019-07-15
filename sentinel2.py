@@ -258,7 +258,7 @@ def sentinel2_bot(
         # partial acquisitions
         black = count_pixels(rgb)
         print(black, rgb.shape[0], rgb.shape[1])
-        if black / (rgb.shape[0] * rgb.shape[1]) > 0.3:
+        if black / (rgb.shape[0] * rgb.shape[1]) > 0.1:
             logging.info("Skipping image because it is incomplete.")
             continue
 
