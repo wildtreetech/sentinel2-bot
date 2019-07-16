@@ -246,7 +246,11 @@ def sentinel2_bot(
                         src.read(window=Window(4392, 4392, 1098 * 2, 1098 * 2))
                     )
 
-        logging.info("Address: %s" % get_address(lat, lng))
+        address = get_address(lat, lng)
+        logging.info("Address: %s" % address)
+        if address.startswith("Unknown location") and rng.random() > 0.1:
+            logging.info("Skipping image because it is in an unknown location.")
+            continue
 
         # normal window
         rgb = np.stack([a.squeeze(0) for a in bands])
