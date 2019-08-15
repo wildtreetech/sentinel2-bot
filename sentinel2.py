@@ -120,6 +120,13 @@ def get_address(lat, lng):
     return _cut(info["display_name"])
 
 
+def format_map_url(lat, lng):
+    return (
+        "https://www.google.com/maps/@?api=1&map_action=map&zoom=12&"
+        "basemap=satellite&center={:.2f},{:.2f}".format(lat, lng)
+    )
+
+
 def format_lat_lng(lat, lng):
     s = ""
     if lat < 0:
@@ -339,11 +346,12 @@ def sentinel2_bot(
         month = MONTHS[int(date[-4:-2])]
         year = date[:4]
 
-        MSG = "{location} ({lat_lng}), {date}"
+        MSG = "{location} ({lat_lng}), {date} @ {url}"
         msg = MSG.format(
             date="%s %s %s" % (day, month, year),
             lat_lng=format_lat_lng(lat, lng),
             location=get_address(lat, lng),
+            url=format_map_url(lat, lng),
         )
         logging.info("Twitter message: %s" % msg)
         delta = period - (time.time() - last_post)
